@@ -3,8 +3,8 @@
 //  Где взять: панель Supabase → Project Settings → API
 // ─────────────────────────────────────────────────────────────
 
-export const SUPABASE_URL = "https://ВАШ-ПРОЕКТ.supabase.co";
-export const SUPABASE_ANON_KEY = "ВАШ-ANON-PUBLIC-KEY";
+export const SUPABASE_URL = "https://hhbdeqdodasjmusiktui.supabase.co";
+export const SUPABASE_ANON_KEY = "sb_publishable_pmNTJhYq3qHN0bVaILbZxQ_nE9RknAv";
 
 // PIN для режима администратора (добавление событий в календарь,
 // удаление любых сообщений). Смени на свой.
