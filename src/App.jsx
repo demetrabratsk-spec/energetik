@@ -31,7 +31,7 @@ body{margin:0}
 .eg-root{font-family:'Inter',system-ui,sans-serif;color:${T.text};background:${T.bg};min-height:100vh}
 .eg-disp{font-family:'Oswald','Inter',sans-serif;text-transform:uppercase;letter-spacing:.02em;font-weight:700;line-height:.95}
 .eg-shell{max-width:520px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;position:relative}
-.eg-top{position:sticky;top:0;z-index:20;background:${T.bg}dd;backdrop-filter:blur(10px);border-bottom:1px solid ${T.line};padding:12px 16px;display:flex;align-items:center;gap:10px}
+.eg-top{position:sticky;top:0;z-index:20;background:${T.bg}dd;backdrop-filter:blur(10px);border-bottom:1px solid ${T.line};padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top));display:flex;align-items:center;gap:10px}
 .eg-body{flex:1;padding:16px 16px 96px}
 .eg-card{background:${T.surface};border:1px solid ${T.line};border-radius:18px;padding:16px}
 .eg-btn{border:0;border-radius:12px;font-weight:600;font-size:15px;padding:12px 16px;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;gap:8px}
@@ -222,7 +222,7 @@ export default function App() {
 /* ── Экран «не настроено» ──────────────────────────────── */
 function NotConfigured() {
   return (
-    <div className="eg-root"><div className="eg-shell"><div className="eg-body" style={{ paddingTop: 60 }}>
+    <div className="eg-root"><div className="eg-shell"><div className="eg-body" style={{ paddingTop: "calc(60px + env(safe-area-inset-top))" }}>
       <div style={{ textAlign: "center" }}>
         <img src={logo} alt="" style={{ width: 96, height: 96, objectFit: "contain" }} />
         <h1 className="eg-disp" style={{ fontSize: 30, marginTop: 10 }}>Почти готово</h1>
@@ -270,7 +270,7 @@ function Onboarding({ onDone }) {
   const canGo = name.trim().length >= 2 && pw.length >= 1;
   const go = e => { if (e) e.preventDefault(); if (!canGo || busy) return; (mode === "login" ? doLogin : doRegister)(); };
   return (
-    <div className="eg-root"><div className="eg-shell"><div className="eg-body" style={{ paddingTop: 30 }}>
+    <div className="eg-root"><div className="eg-shell"><div className="eg-body" style={{ paddingTop: "calc(30px + env(safe-area-inset-top))" }}>
       <div style={{ textAlign: "center", marginBottom: 16 }}>
         <img src={logo} alt="Энергетик" style={{ width: 140, height: 140, objectFit: "contain" }} />
         <p style={{ color: T.muted, marginTop: 4 }}>Беговой клуб · Братск</p>
@@ -712,7 +712,7 @@ function Room({ me, isAdmin, profiles, chat, onBack, frequentEmojis, bumpEmoji }
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 150px)" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 150px - env(safe-area-inset-top) - env(safe-area-inset-bottom))" }}>
       {/* шапка комнаты */}
       <div className="eg-row" style={{ gap: 8, paddingBottom: 10, borderBottom: `1px solid ${T.line}`, marginBottom: 10 }}>
         <button className="eg-btn eg-ghost" style={{ padding: "6px 8px" }} onClick={onBack}><ChevronLeft size={20} /></button>
