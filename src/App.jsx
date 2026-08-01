@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Zap, Calendar as CalIcon, MessageCircle, User, Plus, Trash2, Send,
   Smile, Medal, Crown, Shield, Check, X, BarChart2, MapPin, Image as ImageIcon,
+  ChevronLeft, ChevronRight, CornerUpLeft, Search, ChevronUp, ChevronDown, Camera,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, ResponsiveContainer, Cell } from "recharts";
 import logo from "./assets/logo.png";
@@ -9,8 +10,11 @@ import { ADMIN_PIN } from "./config";
 import { configured } from "./supabase";
 import {
   listRuns, addRun, delRun, listEvents, addEvent, delEvent,
+  listChats, ensureGeneral, addChat, delChat,
   loadChat, addMessage, delMessage, toggleReaction, setVote,
-  savePhoto, getPhoto, subscribeChat, subscribeData,
+  savePhoto, getPhoto,
+  listMembers, upsertMember,
+  subscribeChat, subscribeChats, subscribeMembers, subscribeData,
 } from "./db";
 
 /* ── Тема ─────────────────────────────────────────────── */
@@ -128,22 +132,32 @@ export default function App() {
   const [tab, setTab] = useState("run");
   const [runs, setRuns] = useState([]);
   const [events, setEvents] = useState([]);
-  const [messages, setMessages] = useState([]);
   const [isAdmin, setIsAdmin] = useState(() => localStorage.getItem("energetik_admin") === "1");
+  const [emojiFreq, setEmojiFreq] = useState(() => { try { return JSON.parse(localStorage.getItem("energetik_emoji_freq")) || {}; } catch { return {}; } });
+  const [profiles, setProfiles] = useState({});
 
   const refreshRuns = () => listRuns().then(setRuns).catch(() => {});
   const refreshEvents = () => listEvents().then(setEvents).catch(() => {});
-  const refreshChat = () => loadChat().then(setMessages).catch(() => {});
+  const refreshProfiles = () => listMembers().then(setProfiles).catch(() => {});
 
   useEffect(() => {
     if (!configured) return;
-    refreshRuns(); refreshEvents(); refreshChat();
-    const u1 = subscribeChat(refreshChat);
-    const u2 = subscribeData(() => { refreshRuns(); refreshEvents(); });
+    refreshRuns(); refreshEvents(); refreshProfiles();
+    if (me) upsertMember(me).then(refreshProfiles).catch(() => {});
+    const u1 = subscribeData(() => { refreshRuns(); refreshEvents(); });
+    const u2 = subscribeMembers(refreshProfiles);
     return () => { u1(); u2(); };
   }, []);
 
-  const saveMe = m => { localStorage.setItem("energetik_me", JSON.stringify(m)); setMe(m); };
+  const bumpEmoji = e => setEmojiFreq(f => { const n = { ...f, [e]: (f[e] || 0) + 1 }; localStorage.setItem("energetik_emoji_freq", JSON.stringify(n)); return n; });
+  const frequentEmojis = useMemo(() => {
+    const sorted = Object.keys(emojiFreq).sort((a, b) => emojiFreq[b] - emojiFreq[a]);
+    const list = [...sorted];
+    for (const e of QUICK) if (!list.includes(e)) list.push(e);
+    return list.slice(0, 7);
+  }, [emojiFreq]);
+
+  const saveMe = m => { localStorage.setItem("energetik_me", JSON.stringify(m)); setMe(m); upsertMember(m).then(refreshProfiles).catch(() => {}); };
   const tryAdmin = pin => { if (pin === ADMIN_PIN) { localStorage.setItem("energetik_admin", "1"); setIsAdmin(true); return true; } return false; };
 
   if (!configured) return <><style>{CSS}</style><NotConfigured /></>;
@@ -163,10 +177,10 @@ export default function App() {
         </header>
 
         <main className="eg-body">
-          {tab === "run" && <RunTab {...{ me, runs, refreshRuns }} />}
+          {tab === "run" && <RunTab {...{ me, runs, refreshRuns, profiles }} />}
           {tab === "cal" && <CalTab {...{ events, refreshEvents, isAdmin }} />}
-          {tab === "chat" && <ChatTab {...{ me, messages, refreshChat, isAdmin }} />}
-          {tab === "me" && <MeTab {...{ me, saveMe, isAdmin, tryAdmin }} />}
+          {tab === "chat" && <ChatSection {...{ me, isAdmin, profiles, frequentEmojis, bumpEmoji }} />}
+          {tab === "me" && <MeTab {...{ me, saveMe, isAdmin, tryAdmin, profiles }} />}
         </main>
 
         <nav className="eg-tabbar">
@@ -199,7 +213,15 @@ function NotConfigured() {
 
 /* ── Знакомство ────────────────────────────────────────── */
 function Onboarding({ onDone }) {
-  const [name, setName] = useState(""); const [ava, setAva] = useState("🏃");
+  const [name, setName] = useState("");
+  const [sel, setSel] = useState({ ava: "🏃", photoId: null, photoPending: null });
+  const [saving, setSaving] = useState(false);
+  const enter = async () => {
+    setSaving(true);
+    let pid = sel.photoId;
+    if (sel.photoPending) { try { pid = await savePhoto(sel.photoPending); } catch {} }
+    onDone({ id: uid(), name: name.trim(), ava: sel.ava || "🏃", photoId: pid || null });
+  };
   return (
     <div className="eg-root"><div className="eg-shell"><div className="eg-body" style={{ paddingTop: 34 }}>
       <div style={{ textAlign: "center", marginBottom: 20 }}>
@@ -209,12 +231,10 @@ function Onboarding({ onDone }) {
       <div className="eg-card">
         <label className="eg-lbl">Как тебя зовут в клубе</label>
         <input className="eg-in" style={{ marginTop: 8 }} placeholder="Имя и фамилия" value={name} onChange={e => setName(e.target.value)} />
-        <div className="eg-lbl" style={{ margin: "16px 0 8px" }}>Аватар</div>
-        <div className="eg-row" style={{ flexWrap: "wrap", gap: 8 }}>
-          {AVATARS.map(a => <button key={a} className="eg-emoji" style={{ fontSize: 24, borderRadius: 12, background: a === ava ? T.goldDim : T.bg, border: a === ava ? `1px solid ${T.gold}` : `1px solid ${T.line}` }} onClick={() => setAva(a)}>{a}</button>)}
-        </div>
-        <button className="eg-btn eg-gold" style={{ width: "100%", marginTop: 18 }} disabled={!name.trim()} onClick={() => onDone({ id: uid(), name: name.trim(), ava })}>
-          Войти в клуб
+        <div className="eg-lbl" style={{ margin: "16px 0 8px" }}>Аватар — фото или эмодзи</div>
+        <AvatarPicker onChange={setSel} />
+        <button className="eg-btn eg-gold" style={{ width: "100%", marginTop: 18 }} disabled={!name.trim() || saving} onClick={enter}>
+          {saving ? "Входим…" : "Войти в клуб"}
         </button>
       </div>
     </div></div></div>
@@ -222,7 +242,7 @@ function Onboarding({ onDone }) {
 }
 
 /* ── Вкладка «Пробег» ──────────────────────────────────── */
-function RunTab({ me, runs, refreshRuns }) {
+function RunTab({ me, runs, refreshRuns, profiles }) {
   const [km, setKm] = useState(""); const [note, setNote] = useState(""); const [date, setDate] = useState(todayStr());
   const [saving, setSaving] = useState(false);
   const yearRuns = runs.filter(r => r.date.startsWith(String(YEAR)));
@@ -299,11 +319,11 @@ function RunTab({ me, runs, refreshRuns }) {
               <div style={{ width: 22, textAlign: "center", fontWeight: 700, color: i < 3 ? T.gold : T.muted }}>
                 {i === 0 ? <Medal size={18} color={T.gold} /> : i + 1}
               </div>
-              <div className="eg-ava">{b.ava || "🏃"}</div>
+              <Avatar profile={profiles[b.uid]} name={b.name} ava={b.ava} size={38} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="eg-row" style={{ justifyContent: "space-between" }}>
                   <span style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {b.name}{b.uid === me.id && " · ты"} {b.km >= GOAL && "⚡"}
+                    {(profiles[b.uid]?.name || b.name)}{b.uid === me.id && " · ты"} {b.km >= GOAL && "⚡"}
                   </span>
                   <span style={{ fontWeight: 700, color: T.gold }}>{b.km.toFixed(0)}</span>
                 </div>
@@ -393,90 +413,270 @@ function CalTab({ events, refreshEvents, isAdmin }) {
   );
 }
 
-/* ── Вкладка «Чат» ─────────────────────────────────────── */
-function ChatTab({ me, messages, refreshChat, isAdmin }) {
-  const [text, setText] = useState("");
-  const [showEmoji, setShowEmoji] = useState(false);
-  const [reactFor, setReactFor] = useState(null);
-  const [pollMode, setPollMode] = useState(false);
-  const [pq, setPq] = useState(""); const [popts, setPopts] = useState(["", ""]);
-  const [pending, setPending] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [photos, setPhotos] = useState({});
-  const [zoom, setZoom] = useState(null);
-  const endRef = useRef(null); const fileRef = useRef(null);
-  const msgs = messages.slice(-120);
+/* ── Аватар: фото или эмодзи, привязан к участнику ─────── */
+const _avaCache = {};
+function Avatar({ profile, name, ava, size = 38 }) {
+  const pid = profile?.photoId;
+  const [url, setUrl] = React.useState(pid ? _avaCache[pid] || null : null);
+  React.useEffect(() => {
+    let a = true;
+    if (pid && !_avaCache[pid]) getPhoto(pid).then(u => { _avaCache[pid] = u; if (a) setUrl(u); });
+    else setUrl(pid ? _avaCache[pid] : null);
+    return () => { a = false; };
+  }, [pid]);
+  const emoji = profile?.ava || ava || "🏃";
+  return (
+    <div className="eg-ava" style={{ width: size, height: size, fontSize: Math.round(size * 0.5) }}>
+      {pid && url ? <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} /> : emoji}
+    </div>
+  );
+}
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs.length]);
+/* выбор аватара: фото ИЛИ эмодзи */
+function AvatarPicker({ initAva = "🏃", initPhotoId = null, onChange }) {
+  const [ava, setAva] = React.useState(initAva || "🏃");
+  const [photoId, setPhotoId] = React.useState(initPhotoId || null);
+  const [pending, setPending] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const fileRef = React.useRef(null);
 
-  useEffect(() => {
+  const pickEmoji = a => { setAva(a); setPhotoId(null); setPending(null); onChange({ ava: a, photoId: null, photoPending: null }); };
+  const pickPhoto = async e => {
+    const f = e.target.files?.[0]; e.target.value = ""; if (!f) return;
+    setBusy(true);
+    try { const url = await compressImage(f, 512); setPending(url); onChange({ ava, photoId: null, photoPending: url }); } catch {} finally { setBusy(false); }
+  };
+
+  return (
+    <div>
+      <div className="eg-row" style={{ gap: 14, marginBottom: 12 }}>
+        <div className="eg-ava" style={{ width: 68, height: 68, fontSize: 32, overflow: "hidden" }}>
+          {pending ? <img src={pending} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            : photoId ? <Avatar profile={{ photoId }} size={68} /> : ava}
+        </div>
+        <div style={{ flex: 1 }}>
+          <input ref={fileRef} type="file" accept="image/*" onChange={pickPhoto} style={{ display: "none" }} />
+          <button className="eg-btn eg-ghost" style={{ width: "100%" }} onClick={() => fileRef.current?.click()}>
+            <Camera size={18} /> {busy ? "Готовлю…" : (pending || photoId ? "Сменить фото" : "Своё фото")}
+          </button>
+          {(pending || photoId) && <div className="eg-meta" style={{ marginTop: 6 }}>Или выбери эмодзи ниже — фото сбросится.</div>}
+        </div>
+      </div>
+      <div className="eg-row" style={{ flexWrap: "wrap", gap: 8 }}>
+        {AVATARS.map(a => {
+          const on = !photoId && !pending && a === ava;
+          return <button key={a} className="eg-emoji" style={{ fontSize: 24, borderRadius: 12, background: on ? T.goldDim : T.bg, border: on ? `1px solid ${T.gold}` : `1px solid ${T.line}` }} onClick={() => pickEmoji(a)}>{a}</button>;
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── Раздел «Чат»: список комнат + переписка ──────────── */
+function ChatSection({ me, isAdmin, profiles, frequentEmojis, bumpEmoji }) {
+  const [chats, setChats] = React.useState([]);
+  const [openId, setOpenId] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+
+  const refresh = () => listChats().then(cs => { setChats(cs); setLoading(false); });
+  React.useEffect(() => {
     let alive = true;
-    (async () => {
-      for (const m of msgs) if (m.photoId && !(m.photoId in photos)) {
-        const url = await getPhoto(m.photoId);
-        if (alive) setPhotos(p => ({ ...p, [m.photoId]: url }));
-      }
-    })();
+    (async () => { await ensureGeneral(); if (alive) refresh(); })();
+    const u = subscribeChats(refresh);
+    return () => { alive = false; u(); };
+  }, []);
+
+  const open = chats.find(c => c.id === openId);
+  if (open) return <Room {...{ me, isAdmin, profiles, chat: open, onBack: () => setOpenId(null), frequentEmojis, bumpEmoji }} />;
+  return <ChatList {...{ me, isAdmin, chats, loading, onOpen: setOpenId, refresh }} />;
+}
+
+function ChatList({ me, isAdmin, chats, loading, onOpen, refresh }) {
+  const [creating, setCreating] = React.useState(false);
+  const [title, setTitle] = React.useState(""); const [icon, setIcon] = React.useState("💬");
+  const [pickIcon, setPickIcon] = React.useState(false);
+
+  const create = async () => {
+    if (!title.trim()) return;
+    await addChat(me, title.trim(), icon);
+    setTitle(""); setIcon("💬"); setCreating(false); refresh();
+  };
+  const remove = async c => {
+    if (!window.confirm(`Удалить чат «${c.title}» вместе со всеми сообщениями?`)) return;
+    await delChat(c.id); refresh();
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div className="eg-row" style={{ justifyContent: "space-between" }}>
+        <h2 className="eg-disp" style={{ fontSize: 22 }}>Чаты</h2>
+        <button className="eg-btn eg-gold" style={{ padding: "8px 12px" }} onClick={() => setCreating(v => !v)}>{creating ? <X size={16} /> : <Plus size={16} />} Чат</button>
+      </div>
+
+      {creating && (
+        <div className="eg-card eg-pop" style={{ display: "grid", gap: 8 }}>
+          <div className="eg-lbl">Новый чат по интересам</div>
+          <div className="eg-row" style={{ gap: 8 }}>
+            <button className="eg-btn eg-ghost" style={{ padding: "8px 12px", fontSize: 22 }} onClick={() => setPickIcon(p => !p)}>{icon}</button>
+            <input className="eg-in" placeholder="Название, напр. Барахолка" value={title} onChange={e => setTitle(e.target.value)} />
+          </div>
+          {pickIcon && <div className="eg-emoji-grid eg-card eg-scroll" style={{ padding: 6 }}>{EMOJIS.map((e, i) => <button key={i} className="eg-emoji" onClick={() => { setIcon(e); setPickIcon(false); }}>{e}</button>)}</div>}
+          <button className="eg-btn eg-gold" disabled={!title.trim()} onClick={create}>Создать чат</button>
+        </div>
+      )}
+
+      {loading && <div className="eg-card eg-meta">Загрузка…</div>}
+      {chats.map(c => (
+        <div key={c.id} className="eg-card eg-row" style={{ justifyContent: "space-between", cursor: "pointer", padding: 14 }} onClick={() => onOpen(c.id)}>
+          <div className="eg-row" style={{ gap: 12 }}>
+            <div className="eg-ava" style={{ fontSize: 20 }}>{c.icon || "💬"}</div>
+            <div>
+              <div style={{ fontWeight: 600 }}>{c.title}</div>
+              <div className="eg-meta">{c.general ? "основной чат клуба" : "чат по интересам"}</div>
+            </div>
+          </div>
+          <div className="eg-row" style={{ gap: 6 }}>
+            {isAdmin && !c.general && <button className="eg-emoji" style={{ color: T.muted }} onClick={e => { e.stopPropagation(); remove(c); }}><Trash2 size={16} /></button>}
+            <ChevronRight size={18} color={T.muted} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Room({ me, isAdmin, profiles, chat, onBack, frequentEmojis, bumpEmoji }) {
+  const [messages, setMessages] = React.useState([]);
+  const [text, setText] = React.useState("");
+  const [showEmoji, setShowEmoji] = React.useState(false);
+  const [reactFor, setReactFor] = React.useState(null);
+  const [reactPicker, setReactPicker] = React.useState(null);
+  const [pollMode, setPollMode] = React.useState(false);
+  const [pq, setPq] = React.useState(""); const [popts, setPopts] = React.useState(["", ""]);
+  const [pending, setPending] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [photos, setPhotos] = React.useState({});
+  const [zoom, setZoom] = React.useState(null);
+  const [reply, setReply] = React.useState(null);
+  const [searchOn, setSearchOn] = React.useState(false);
+  const [q, setQ] = React.useState("");
+  const [hit, setHit] = React.useState(0);
+  const endRef = React.useRef(null); const fileRef = React.useRef(null);
+  const msgRefs = React.useRef({});
+
+  const refresh = () => loadChat(chat.id).then(setMessages).catch(() => {});
+  React.useEffect(() => { refresh(); const u = subscribeChat(refresh); return () => u(); }, [chat.id]);
+
+  const msgs = messages.slice(-300);
+  const byId = React.useMemo(() => { const m = {}; messages.forEach(x => m[x.id] = x); return m; }, [messages]);
+  const nameOf = m => profiles[m.uid]?.name || m.name;
+
+  // поиск: id сообщений, где встречается слово
+  const matches = React.useMemo(() => {
+    const s = q.trim().toLowerCase(); if (!s) return [];
+    return msgs.filter(m => (m.text || "").toLowerCase().includes(s)).map(m => m.id);
+  }, [q, msgs]);
+  React.useEffect(() => { setHit(0); }, [q]);
+  const gotoHit = i => {
+    if (!matches.length) return;
+    const idx = (i + matches.length) % matches.length; setHit(idx);
+    const el = msgRefs.current[matches[idx]];
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
+  React.useEffect(() => { if (!searchOn) endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs.length]);
+  React.useEffect(() => {
+    let alive = true;
+    (async () => { for (const m of msgs) if (m.photoId && !(m.photoId in photos)) { const url = await getPhoto(m.photoId); if (alive) setPhotos(p => ({ ...p, [m.photoId]: url })); } })();
     return () => { alive = false; };
   }, [msgs.map(m => m.photoId).join(",")]);
 
-  const onFile = async e => {
-    const f = e.target.files?.[0]; e.target.value = ""; if (!f) return;
-    setBusy(true);
-    try { setPending({ url: await compressImage(f) }); } catch {} finally { setBusy(false); }
-  };
-
+  const onFile = async e => { const f = e.target.files?.[0]; e.target.value = ""; if (!f) return; setBusy(true); try { setPending({ url: await compressImage(f) }); } catch {} finally { setBusy(false); } };
   const send = async () => {
     const t = text.trim(); if (!t && !pending) return;
     let pid = null;
     if (pending) { pid = await savePhoto(pending.url); if (pid) setPhotos(p => ({ ...p, [pid]: pending.url })); }
-    await addMessage(me, t, pid, null);
-    setText(""); setPending(null); setShowEmoji(false); refreshChat();
+    await addMessage(me, chat.id, t, pid, null, reply?.id || null);
+    setText(""); setPending(null); setShowEmoji(false); setReply(null); refresh();
   };
-
   const createPoll = async () => {
     const opts = popts.map(o => o.trim()).filter(Boolean);
     if (!pq.trim() || opts.length < 2) return;
-    await addMessage(me, null, null, { q: pq.trim(), opts });
-    setPq(""); setPopts(["", ""]); setPollMode(false); refreshChat();
+    await addMessage(me, chat.id, null, null, { q: pq.trim(), opts }, null);
+    setPq(""); setPopts(["", ""]); setPollMode(false); refresh();
+  };
+  const react = async (mid, emoji) => { bumpEmoji(emoji); await toggleReaction(mid, me, emoji); refresh(); };
+  const vote = async (mid, idx) => { await setVote(mid, me, idx); refresh(); };
+  const remove = async mid => { await delMessage(mid); refresh(); };
+  const insertEmoji = e => { bumpEmoji(e); setText(t => t + e); };
+
+  const hl = (txt) => {
+    const s = q.trim(); if (!s || !txt) return txt;
+    const parts = txt.split(new RegExp(`(${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "ig"));
+    return parts.map((p, i) => p.toLowerCase() === s.toLowerCase()
+      ? <mark key={i} style={{ background: T.gold, color: "#22160a", borderRadius: 3, padding: "0 2px" }}>{p}</mark> : p);
   };
 
-  const react = async (mid, emoji) => { await toggleReaction(mid, me, emoji); refreshChat(); };
-  const vote = async (mid, idx) => { await setVote(mid, me, idx); refreshChat(); };
-  const remove = async mid => { await delMessage(mid); refreshChat(); };
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 170px)" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 150px)" }}>
+      {/* шапка комнаты */}
+      <div className="eg-row" style={{ gap: 8, paddingBottom: 10, borderBottom: `1px solid ${T.line}`, marginBottom: 10 }}>
+        <button className="eg-btn eg-ghost" style={{ padding: "6px 8px" }} onClick={onBack}><ChevronLeft size={20} /></button>
+        <div className="eg-ava" style={{ width: 34, height: 34, fontSize: 18 }}>{chat.icon || "💬"}</div>
+        <div style={{ fontWeight: 700, fontSize: 17, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{chat.title}</div>
+        <button className="eg-btn eg-ghost" style={{ padding: "6px 8px" }} onClick={() => { setSearchOn(s => !s); setQ(""); }}><Search size={18} color={searchOn ? T.gold : T.text} /></button>
+      </div>
+
+      {searchOn && (
+        <div className="eg-row" style={{ gap: 8, marginBottom: 10 }}>
+          <input className="eg-in" autoFocus placeholder="Поиск по сообщениям…" value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === "Enter" && gotoHit(hit + 1)} />
+          <span className="eg-meta" style={{ whiteSpace: "nowrap" }}>{matches.length ? `${hit + 1}/${matches.length}` : (q ? "0" : "")}</span>
+          <button className="eg-btn eg-ghost" style={{ padding: 10 }} disabled={!matches.length} onClick={() => gotoHit(hit - 1)}><ChevronUp size={18} /></button>
+          <button className="eg-btn eg-ghost" style={{ padding: 10 }} disabled={!matches.length} onClick={() => gotoHit(hit + 1)}><ChevronDown size={18} /></button>
+        </div>
+      )}
+
       <div className="eg-scroll" style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 14, paddingBottom: 8 }}>
-        {msgs.length === 0 && <div className="eg-card eg-meta" style={{ margin: "auto" }}>Чат пуст. Поздоровайся с клубом 👋 или запусти голосовалку за ближайший забег.</div>}
+        {msgs.length === 0 && <div className="eg-card eg-meta" style={{ margin: "auto" }}>Пока пусто. Напиши первым 👋</div>}
         {msgs.map(m => {
           const mine = m.uid === me.id;
+          const rep = m.replyTo ? byId[m.replyTo] : null;
+          const isHit = matches[hit] === m.id;
           return (
-            <div key={m.id} style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 3 }}>
-              {!mine && <div className="eg-meta" style={{ marginLeft: 44 }}>{m.ava} {m.name}</div>}
+            <div key={m.id} ref={el => (msgRefs.current[m.id] = el)} style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", gap: 3 }}>
+              {!mine && <div className="eg-meta" style={{ marginLeft: 44 }}>{nameOf(m)}</div>}
               <div className="eg-row" style={{ alignItems: "flex-end", gap: 8, flexDirection: mine ? "row-reverse" : "row", maxWidth: "100%" }}>
-                {!mine && <div className="eg-ava" style={{ width: 32, height: 32, fontSize: 16 }}>{m.ava || "🏃"}</div>}
+                {!mine && <Avatar profile={profiles[m.uid]} name={m.name} ava={m.ava} size={32} />}
                 <div>
-                  <div className={"eg-bubble" + (mine ? " eg-mine" : "")} style={m.photoId ? { padding: 5 } : undefined}>
+                  <div className={"eg-bubble" + (mine ? " eg-mine" : "")} style={{ outline: isHit ? `2px solid ${T.gold}` : "none" }}>
+                    {rep && (
+                      <div style={{ borderLeft: `3px solid ${T.gold}`, padding: "2px 8px", margin: "0 0 6px", background: "rgba(0,0,0,.18)", borderRadius: 6, fontSize: 13 }}>
+                        <div style={{ color: T.gold, fontWeight: 600 }}>{nameOf(rep)}</div>
+                        <div className="eg-meta" style={{ color: T.text, opacity: .8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 210 }}>{rep.photoId ? "📷 фото" : (rep.poll ? "📊 " + rep.poll.q : rep.text)}</div>
+                      </div>
+                    )}
                     {m.photoId && (photos[m.photoId]
-                      ? <img src={photos[m.photoId]} alt="фото" onClick={() => setZoom(photos[m.photoId])} style={{ display: "block", maxWidth: 240, width: "100%", borderRadius: 12, cursor: "zoom-in" }} />
+                      ? <img src={photos[m.photoId]} alt="фото" onClick={() => setZoom(photos[m.photoId])} style={{ display: "block", maxWidth: 240, width: "100%", borderRadius: 12, cursor: "zoom-in", marginBottom: m.text ? 6 : 0 }} />
                       : <div style={{ width: 200, height: 140, borderRadius: 12, background: T.bg, display: "grid", placeItems: "center", color: T.muted }}><ImageIcon size={22} /></div>)}
-                    {m.text && <div style={m.photoId ? { padding: "6px 7px 0" } : undefined}>{m.text}</div>}
+                    {m.text && <div>{hl(m.text)}</div>}
                     {m.poll && <Poll m={m} me={me} onVote={vote} />}
-                    <div className="eg-meta" style={{ marginTop: 4, textAlign: "right", padding: m.photoId ? "0 7px 3px" : 0 }}>{fmtTime(m.ts)}</div>
+                    <div className="eg-meta" style={{ marginTop: 4, textAlign: "right" }}>{fmtTime(m.ts)}</div>
                   </div>
                   <div className="eg-row" style={{ gap: 5, marginTop: 5, flexWrap: "wrap", justifyContent: mine ? "flex-end" : "flex-start" }}>
                     {Object.entries(m.reactions || {}).map(([e, us]) => (
                       <button key={e} className={"eg-chip" + (us.includes(me.id) ? " on" : "")} onClick={() => react(m.id, e)}>{e} {us.length}</button>
                     ))}
-                    <button className="eg-chip" style={{ color: T.muted }} onClick={() => setReactFor(reactFor === m.id ? null : m.id)}><Smile size={14} /></button>
+                    <button className="eg-chip" style={{ color: T.muted }} onClick={() => { setReactFor(reactFor === m.id ? null : m.id); setReactPicker(null); }}><Smile size={14} /></button>
+                    <button className="eg-chip" style={{ color: T.muted }} onClick={() => setReply(m)}><CornerUpLeft size={13} /></button>
                     {(mine || isAdmin) && <button className="eg-chip" style={{ color: T.muted }} onClick={() => remove(m.id)}><Trash2 size={13} /></button>}
                   </div>
                   {reactFor === m.id && (
-                    <div className="eg-card eg-pop" style={{ padding: 6, marginTop: 6, display: "flex", gap: 2, width: "fit-content" }}>
-                      {QUICK.map(e => <button key={e} className="eg-emoji" onClick={() => { react(m.id, e); setReactFor(null); }}>{e}</button>)}
+                    <div className="eg-card eg-pop" style={{ padding: 6, marginTop: 6, display: "flex", gap: 2, width: "fit-content", alignItems: "center" }}>
+                      {frequentEmojis.map(e => <button key={e} className="eg-emoji" onClick={() => { react(m.id, e); setReactFor(null); }}>{e}</button>)}
+                      <button className="eg-emoji" style={{ color: T.muted }} onClick={() => { setReactPicker(m.id); setReactFor(null); }}><Plus size={18} /></button>
                     </div>
                   )}
+                  {reactPicker === m.id && <EmojiPanel onPick={e => { react(m.id, e); setReactPicker(null); }} onClose={() => setReactPicker(null)} />}
                 </div>
               </div>
             </div>
@@ -502,7 +702,18 @@ function ChatTab({ me, messages, refreshChat, isAdmin }) {
         </div>
       )}
 
-      {showEmoji && <EmojiPanel onPick={e => setText(t => t + e)} onClose={() => setShowEmoji(false)} />}
+      {showEmoji && <EmojiPanel onPick={insertEmoji} onClose={() => setShowEmoji(false)} />}
+
+      {reply && (
+        <div className="eg-card eg-pop eg-row" style={{ gap: 10, marginBottom: 8, padding: "8px 10px" }}>
+          <CornerUpLeft size={16} color={T.gold} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ color: T.gold, fontWeight: 600, fontSize: 13 }}>{nameOf(reply)}</div>
+            <div className="eg-meta" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{reply.photoId ? "📷 фото" : (reply.poll ? "📊 " + reply.poll.q : reply.text)}</div>
+          </div>
+          <button className="eg-emoji" style={{ color: T.muted }} onClick={() => setReply(null)}><X size={18} /></button>
+        </div>
+      )}
 
       {(pending || busy) && (
         <div className="eg-card eg-pop eg-row" style={{ gap: 10, marginBottom: 8, padding: 8 }}>
@@ -562,18 +773,26 @@ function Poll({ m, me, onVote }) {
 
 /* ── Вкладка «Профиль» ─────────────────────────────────── */
 function MeTab({ me, saveMe, isAdmin, tryAdmin }) {
-  const [name, setName] = useState(me.name); const [ava, setAva] = useState(me.ava);
+  const [name, setName] = useState(me.name);
+  const [sel, setSel] = useState({ ava: me.ava, photoId: me.photoId || null, photoPending: null });
+  const [saving, setSaving] = useState(false);
   const [pin, setPin] = useState(""); const [err, setErr] = useState(false);
-  const dirty = name.trim() && (name.trim() !== me.name || ava !== me.ava);
+  const dirty = name.trim() && (name.trim() !== me.name || sel.ava !== me.ava || (sel.photoId || null) !== (me.photoId || null) || sel.photoPending);
+  const save = async () => {
+    setSaving(true);
+    let pid = sel.photoId;
+    if (sel.photoPending) { try { pid = await savePhoto(sel.photoPending); } catch {} }
+    saveMe({ ...me, name: name.trim(), ava: sel.ava || "🏃", photoId: pid || null });
+    setSaving(false);
+  };
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <div className="eg-card">
         <div className="eg-lbl" style={{ marginBottom: 10 }}>Профиль</div>
         <input className="eg-in" value={name} onChange={e => setName(e.target.value)} />
-        <div className="eg-row" style={{ flexWrap: "wrap", gap: 8, margin: "12px 0" }}>
-          {AVATARS.map(a => <button key={a} className="eg-emoji" style={{ fontSize: 24, borderRadius: 12, background: a === ava ? T.goldDim : T.bg, border: a === ava ? `1px solid ${T.gold}` : `1px solid ${T.line}` }} onClick={() => setAva(a)}>{a}</button>)}
-        </div>
-        <button className="eg-btn eg-gold" style={{ width: "100%" }} disabled={!dirty} onClick={() => saveMe({ ...me, name: name.trim(), ava })}>Сохранить</button>
+        <div className="eg-lbl" style={{ margin: "14px 0 8px" }}>Аватар — фото или эмодзи</div>
+        <AvatarPicker initAva={me.ava} initPhotoId={me.photoId} onChange={setSel} />
+        <button className="eg-btn eg-gold" style={{ width: "100%", marginTop: 14 }} disabled={!dirty || saving} onClick={save}>{saving ? "Сохраняю…" : "Сохранить"}</button>
       </div>
 
       {!isAdmin ? (
