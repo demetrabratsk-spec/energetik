@@ -2,18 +2,18 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Zap, Calendar as CalIcon, MessageCircle, User, Plus, Trash2, Send,
   Smile, Medal, Crown, Shield, Check, X, BarChart2, MapPin, Image as ImageIcon,
-  ChevronLeft, ChevronRight, CornerUpLeft, Search, ChevronUp, ChevronDown, Camera,
+  ChevronLeft, ChevronRight, CornerUpLeft, Search, ChevronUp, ChevronDown, Camera, Pencil,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, ResponsiveContainer, Cell } from "recharts";
 import logo from "./assets/logo.png";
 import { ADMIN_PIN } from "./config";
 import { configured } from "./supabase";
 import {
-  listRuns, addRun, delRun, listEvents, addEvent, delEvent,
+  listRuns, addRun, delRun, updateRun, listEvents, addEvent, delEvent,
   listChats, ensureGeneral, addChat, delChat,
   loadChat, addMessage, delMessage, toggleReaction, setVote,
   savePhoto, getPhoto,
-  listMembers, upsertMember,
+  listMembers, upsertMember, getMemberByLogin, registerMember, setPassword, renameMember,
   subscribeChat, subscribeChats, subscribeMembers, subscribeData,
 } from "./db";
 
@@ -67,6 +67,11 @@ select.eg-in{appearance:none}
 
 /* ── Утилиты ───────────────────────────────────────────── */
 const uid = () => (window.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+async function hashPass(pw) {
+  const buf = new TextEncoder().encode((pw || "") + "::energetik-bratsk");
+  const d = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(d)).map(x => x.toString(16).padStart(2, "0")).join("");
+}
 const YEAR = new Date().getFullYear();
 const GOAL = 1000;
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -74,7 +79,21 @@ const fmtDate = s => new Date(s + "T00:00").toLocaleDateString("ru-RU", { day: "
 const fmtTime = ts => new Date(ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 const AVATARS = ["🏃","🏃‍♀️","⚡","🔥","🐆","🦌","🐅","🚀","💪","🌟","🥇","👟"];
 const QUICK = ["🔥","👍","❤️","👏","💪","😂","🎉","⚡"];
-const EMOJIS = "🏃 🏃‍♀️ 👟 🥇 🥈 🥉 🏅 🎽 ⛰️ 🌄 💦 💨 ⚡ 🔥 💪 ⏱️ 😀 😄 😁 😅 😂 🙂 😉 😍 😎 🤩 🥳 😤 🥵 😴 🤝 🙏 👍 👎 👏 🙌 ✊ 👊 ✌️ 🫶 💯 ❤️ 🧡 💛 💚 💙 💜 🎉 🎊 🎈 🏆 ⭐ ✨ 🌟 🥂 🍾 🎂 ☀️ 🌧️ ❄️ 🌈 🌳 🏞️ 🍓 🍎 🍌 ☕ 🍺".split(" ");
+const EMOJI_CATS = {
+  "Часто": "🏃 🏃‍♀️ 👟 🥇 🏅 🔥 💪 ⚡ 👍 ❤️ 👏 🎉 😂 🙌 🥳 💯",
+  "Смайлы": "😀 😃 😄 😁 😆 😅 🤣 😂 🙂 🙃 🫠 😉 😊 😇 🥰 😍 🤩 😘 😗 😚 😙 🥲 😋 😛 😜 🤪 😝 🤑 🤗 🤭 🫢 🤫 🤔 🫡 🤐 🤨 😐 😑 😶 🫥 😏 😒 🙄 😬 🤥 😌 😔 😪 🤤 😴 😷 🤒 🤕 🤢 🤮 🤧 🥵 🥶 🥴 😵 🤯 🤠 🥳 🥸 😎 🤓 🧐 😕 🫤 😟 🙁 😮 😯 😲 😳 🥺 🥹 😦 😧 😨 😰 😥 😢 😭 😱 😖 😣 😞 😓 😩 😫 🥱 😤 😡 😠 🤬 😈 👿 💀 💩 🤡 👻 👽 🤖",
+  "Жесты": "👋 🤚 🖐 ✋ 🖖 🫲 🫱 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 👈 👉 👆 👇 ☝️ 👍 👎 ✊ 👊 🤛 🤜 👏 🙌 🫶 👐 🤲 🙏 ✍️ 💅 🤝 💪 🦾 🦵 🦶 👂 👃 🧠 🫀 👀 👁 👅 👄",
+  "Люди": "👶 🧒 👦 👧 🧑 👨 👩 🧔 👴 👵 🙍 🙎 🙅 🙆 💁 🙋 🧏 🙇 🤦 🤷 👮 🕵️ 💂 🥷 👷 🫅 🤴 👸 🦸 🦹 🧙 🧚 🧛 🧜 🧝 🧞 🧟 💆 💇 🚶 🧍 🧎 🏃 💃 🕺 👯 🧖 🧗 🤺 🏇 ⛷️ 🏂 🏌️ 🏄 🚣 🏊 ⛹️ 🏋️ 🚴 🚵 🤸 🤼 🤽 🤾 🤹 🧘",
+  "Сердца": "❤️ 🧡 💛 💚 💙 💜 🤎 🖤 🤍 💔 ❣️ 💕 💞 💓 💗 💖 💘 💝 💟 ❤️‍🔥 ❤️‍🩹 💋",
+  "Животные": "🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🙈 🙉 🙊 🐔 🐧 🐦 🐤 🦆 🦅 🦉 🦇 🐺 🐗 🐴 🦄 🐝 🐛 🦋 🐌 🐞 🐜 🦗 🕷 🦂 🐢 🐍 🦎 🦖 🐙 🦑 🦐 🦀 🐠 🐟 🐬 🐳 🐋 🦈 🐊 🐅 🐆 🦓 🦍 🐘 🦏 🐪 🦒 🦘 🐄 🐎 🐖 🐑 🐐 🦌 🐕 🐩 🐈 🐓 🦃 🕊 🐇 🐁 🐿 🦔 🐾",
+  "Еда": "🍏 🍎 🍐 🍊 🍋 🍌 🍉 🍇 🍓 🫐 🍈 🍒 🍑 🥭 🍍 🥥 🥝 🍅 🥑 🥦 🥬 🥒 🌶 🌽 🥕 🧄 🧅 🥔 🍠 🥐 🍞 🥖 🥨 🧀 🥚 🍳 🧈 🥞 🧇 🥓 🍗 🍖 🌭 🍔 🍟 🍕 🥪 🌮 🌯 🥗 🍝 🍜 🍲 🍛 🍣 🍱 🥟 🍤 🍙 🍚 🍘 🍥 🥠 🍦 🍰 🎂 🧁 🥧 🍫 🍬 🍭 🍮 🍯 🍩 🍪 🌰 🥜 🍺 🍻 🥂 🍷 🥃 🍸 🍹 🧃 🥤 🧋 ☕ 🍵 🧉 🍶",
+  "Спорт": "⚽ 🏀 🏈 ⚾ 🥎 🎾 🏐 🏉 🥏 🎱 🏓 🏸 🥅 🏒 🏑 🥍 🏏 ⛳ 🏹 🎣 🥊 🥋 🎽 🛹 🛼 🛷 ⛸ 🥌 🎿 ⛷ 🏂 🏋️ 🤼 🤸 🤺 🤾 🏌️ 🏇 🧘 🏄 🏊 🤽 🚣 🚴 🚵 🏆 🥇 🥈 🥉 🏅 🎖 🏵 🎗 🎫 🎟",
+  "Природа": "🌵 🎄 🌲 🌳 🌴 🌱 🌿 ☘️ 🍀 🎍 🎋 🍃 🍂 🍁 🌾 🌷 🌹 🥀 🌺 🌸 🌼 🌻 🌞 🌝 🌛 🌜 🌚 🌕 🌖 🌗 🌘 🌑 🌒 🌓 🌔 🌙 🌎 🌍 🌏 ⭐ 🌟 ✨ ⚡ ☄️ 💥 🔥 🌪 🌈 ☀️ 🌤 ⛅ 🌥 ☁️ 🌦 🌧 ⛈ 🌩 🌨 ❄️ ☃️ ⛄ 💨 💧 💦 🌊",
+  "Путешествия": "🚗 🚕 🚙 🚌 🚎 🏎 🚓 🚑 🚒 🚐 🚚 🚛 🚜 🛵 🏍 🚲 🛴 🚨 🚔 🚍 🚄 🚅 🚈 🚂 🚆 🚇 🚊 🚉 ✈️ 🛫 🛬 🚀 🛸 🚁 ⛵ 🚤 🛥 🛳 ⛴ 🚢 ⚓ 🗺 🧭 🏔 ⛰ 🌋 🏕 🏖 🏜 🏝 🏟 🏛 🏗 🏠 🏡 🏢 🏥 🏦 🏨 🏫 🏩 💒 🏰 🗼 🗽 ⛲ ⛺ 🌁 🌃 🏙 🌄 🌅 🌉 🎠 🎡 🎢",
+  "Предметы": "⌚ 📱 💻 ⌨️ 🖥 🖨 🖱 💽 💾 📷 📸 🎥 📞 📟 📺 📻 🎙 ⏰ ⏳ ⌛ 🔋 🔌 💡 🔦 🕯 🧯 🛢 💸 💵 💴 💶 💷 🪙 💰 💳 💎 🔧 🔨 ⚒ 🛠 ⛏ 🔩 ⚙️ 🧰 🧲 🔫 💣 🔪 🛡 🚬 ⚰️ 🏺 🔮 📿 🧿 💈 🔭 🔬 🕳 💊 💉 🩸 🩹 🩺 🌡 🚽 🚿 🛁 🧴 🧷 🧹 🧺 🧻 🧼 🧽 🔑 🗝 🚪 🛋 🛏 🖼 🛍 🎁 🎈 🎉 🎊 🎃 🎄 🎗 🎟 🎫",
+  "Символы": "❤️ 💯 ✅ ❌ ⭕ 🚫 💢 ♨️ 🔔 🔕 🎵 🎶 ➕ ➖ ➗ ✖️ ♾ 💲 💱 ❗ ❓ ❕ ❔ ‼️ ⁉️ 🔅 🔆 〽️ ⚠️ 🚸 🔱 ⚜️ 🔰 ♻️ ✳️ ❇️ ✴️ 💠 🌀 🔠 🔤 🔡 🅰️ 🅱️ 🆎 🅾️ 🆑 🆘 ⛔ 📛 🚭 ❎ ✔️ ☑️ 🔟 🔢 #️⃣ *️⃣ ⏏️ ▶️ ⏸ ⏯ ⏹ ⏺ ⏭ ⏮ ⏩ ⏪ 🔀 🔁 🔂 ◀️ 🔼 🔽 ⏫ ⏬ 🔴 🟠 🟡 🟢 🔵 🟣 🟤 ⚫ ⚪ 🟥 🟧 🟨 🟩 🟦 🟪 🟫 ⬛ ⬜ ◼️ ◻️ ▪️ ▫️ 🔶 🔷 🔸 🔹 🔺 🔻 💠 🔘 🔳 🔲",
+};
+const EMOJIS = Object.values(EMOJI_CATS).join(" ").split(" ").filter((e, i, a) => e && a.indexOf(e) === i);
 const EVTYPES = { забег: { i: "🏁" }, тренировка: { i: "🏃" }, праздник: { i: "🎉" }, другое: { i: "📌" } };
 
 function compressImage(file, maxDim = 1280) {
@@ -114,14 +133,19 @@ function Bolt({ pct = 0, size = 132 }) {
 
 function EmojiPanel({ onPick, onClose }) {
   return (
-    <div className="eg-card eg-pop eg-scroll" style={{ padding: 8, marginTop: 8 }}>
-      <div className="eg-row" style={{ justifyContent: "space-between", padding: "2px 6px 6px" }}>
+    <div className="eg-card eg-pop eg-scroll" style={{ padding: 8, marginTop: 8, maxHeight: 280, overflowY: "auto" }}>
+      <div className="eg-row" style={{ justifyContent: "space-between", padding: "2px 6px 6px", position: "sticky", top: 0, background: T.surface }}>
         <span className="eg-lbl">Эмодзи</span>
         <button className="eg-emoji" style={{ fontSize: 16 }} onClick={onClose}><X size={16} /></button>
       </div>
-      <div className="eg-emoji-grid">
-        {EMOJIS.map((e, i) => <button key={i} className="eg-emoji" onClick={() => onPick(e)}>{e}</button>)}
-      </div>
+      {Object.entries(EMOJI_CATS).map(([cat, str]) => (
+        <div key={cat}>
+          <div className="eg-lbl" style={{ padding: "6px 6px 2px", opacity: .7 }}>{cat}</div>
+          <div className="eg-emoji-grid">
+            {str.split(" ").filter(Boolean).map((e, i) => <button key={cat + i} className="eg-emoji" onClick={() => onPick(e)}>{e}</button>)}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -213,30 +237,72 @@ function NotConfigured() {
 
 /* ── Знакомство ────────────────────────────────────────── */
 function Onboarding({ onDone }) {
+  const [mode, setMode] = useState("login"); // login | register
   const [name, setName] = useState("");
+  const [pw, setPw] = useState("");
   const [sel, setSel] = useState({ ava: "🏃", photoId: null, photoPending: null });
-  const [saving, setSaving] = useState(false);
-  const enter = async () => {
-    setSaving(true);
-    let pid = sel.photoId;
-    if (sel.photoPending) { try { pid = await savePhoto(sel.photoPending); } catch {} }
-    onDone({ id: uid(), name: name.trim(), ava: sel.ava || "🏃", photoId: pid || null });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const doLogin = async () => {
+    setErr(""); setBusy(true);
+    try {
+      const row = await getMemberByLogin(name.trim());
+      if (!row) { setErr("Нет такого участника. Нажми «Регистрация»."); setBusy(false); return; }
+      if (row.pass_hash && row.pass_hash !== await hashPass(pw)) { setErr("Неверный пароль."); setBusy(false); return; }
+      onDone({ id: row.id, name: row.name, ava: row.ava, photoId: row.photo_id });
+    } catch { setErr("Ошибка связи. Попробуй ещё раз."); setBusy(false); }
   };
+  const doRegister = async () => {
+    setErr(""); setBusy(true);
+    try {
+      const exists = await getMemberByLogin(name.trim());
+      if (exists) { setErr("Это имя уже занято. Войди с паролем или возьми имя с уточнением (напр. «Алексей П.»)."); setBusy(false); return; }
+      let pid = sel.photoId;
+      if (sel.photoPending) { try { pid = await savePhoto(sel.photoPending); } catch {} }
+      const id = uid();
+      const e = await registerMember({ id, login: name.trim(), name: name.trim(), ava: sel.ava || "🏃", photoId: pid, passHash: await hashPass(pw) });
+      if (e) { setErr("Не удалось создать учётку. Возможно, имя занято."); setBusy(false); return; }
+      onDone({ id, name: name.trim(), ava: sel.ava || "🏃", photoId: pid || null });
+    } catch { setErr("Ошибка связи. Попробуй ещё раз."); setBusy(false); }
+  };
+
+  const canGo = name.trim().length >= 2 && pw.length >= 1;
+  const go = e => { if (e) e.preventDefault(); if (!canGo || busy) return; (mode === "login" ? doLogin : doRegister)(); };
   return (
-    <div className="eg-root"><div className="eg-shell"><div className="eg-body" style={{ paddingTop: 34 }}>
-      <div style={{ textAlign: "center", marginBottom: 20 }}>
-        <img src={logo} alt="Энергетик" style={{ width: 150, height: 150, objectFit: "contain" }} />
-        <p style={{ color: T.muted, marginTop: 4 }}>Заряжай молнию — беги к 1000 км за год.</p>
+    <div className="eg-root"><div className="eg-shell"><div className="eg-body" style={{ paddingTop: 30 }}>
+      <div style={{ textAlign: "center", marginBottom: 16 }}>
+        <img src={logo} alt="Энергетик" style={{ width: 140, height: 140, objectFit: "contain" }} />
+        <p style={{ color: T.muted, marginTop: 4 }}>Беговой клуб · Братск</p>
       </div>
-      <div className="eg-card">
-        <label className="eg-lbl">Как тебя зовут в клубе</label>
-        <input className="eg-in" style={{ marginTop: 8 }} placeholder="Имя и фамилия" value={name} onChange={e => setName(e.target.value)} />
-        <div className="eg-lbl" style={{ margin: "16px 0 8px" }}>Аватар — фото или эмодзи</div>
-        <AvatarPicker onChange={setSel} />
-        <button className="eg-btn eg-gold" style={{ width: "100%", marginTop: 18 }} disabled={!name.trim() || saving} onClick={enter}>
-          {saving ? "Входим…" : "Войти в клуб"}
+
+      <div className="eg-row" style={{ gap: 8, marginBottom: 12 }}>
+        <button className={"eg-btn " + (mode === "login" ? "eg-gold" : "eg-ghost")} style={{ flex: 1 }} onClick={() => { setMode("login"); setErr(""); }}>Вход</button>
+        <button className={"eg-btn " + (mode === "register" ? "eg-gold" : "eg-ghost")} style={{ flex: 1 }} onClick={() => { setMode("register"); setErr(""); }}>Регистрация</button>
+      </div>
+
+      <form className="eg-card" onSubmit={go}>
+        <label className="eg-lbl" htmlFor="eg-login">Имя и фамилия</label>
+        <input id="eg-login" name="username" autoComplete="username" className="eg-in" style={{ marginTop: 6 }} placeholder="Напр. Дмитрий Пегов" value={name} onChange={e => setName(e.target.value)} />
+        <label className="eg-lbl" htmlFor="eg-pass" style={{ display: "block", marginTop: 12 }}>Пароль</label>
+        <input id="eg-pass" name="password" autoComplete={mode === "login" ? "current-password" : "new-password"} className="eg-in" style={{ marginTop: 6 }} type="password" placeholder="Любой, хоть 12345" value={pw} onChange={e => setPw(e.target.value)} />
+
+        {mode === "register" && <>
+          <div className="eg-lbl" style={{ margin: "14px 0 8px" }}>Аватар — фото или эмодзи</div>
+          <AvatarPicker onChange={setSel} />
+        </>}
+
+        {err && <div style={{ color: T.danger, fontSize: 13, marginTop: 10 }}>{err}</div>}
+
+        <button type="submit" className="eg-btn eg-gold" style={{ width: "100%", marginTop: 16 }} disabled={!canGo || busy}>
+          {busy ? "Секунду…" : (mode === "login" ? "Войти" : "Зарегистрироваться")}
         </button>
-      </div>
+        <div className="eg-meta" style={{ marginTop: 10, textAlign: "center" }}>
+          {mode === "login"
+            ? "Первый раз? Нажми «Регистрация» вверху."
+            : "Запомни имя и пароль — по ним войдёшь с любого телефона."}
+        </div>
+      </form>
     </div></div></div>
   );
 }
@@ -245,6 +311,9 @@ function Onboarding({ onDone }) {
 function RunTab({ me, runs, refreshRuns, profiles }) {
   const [km, setKm] = useState(""); const [note, setNote] = useState(""); const [date, setDate] = useState(todayStr());
   const [saving, setSaving] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [eKm, setEKm] = useState(""); const [eDate, setEDate] = useState("");
   const yearRuns = runs.filter(r => r.date.startsWith(String(YEAR)));
 
   const board = useMemo(() => {
@@ -269,6 +338,13 @@ function RunTab({ me, runs, refreshRuns, profiles }) {
     await addRun(me, Math.round(v * 100) / 100, note.trim() || null, date);
     setKm(""); setNote(""); await refreshRuns(); setSaving(false);
   };
+  const startEdit = r => { setEditId(r.id); setEKm(String(r.km)); setEDate(r.date); };
+  const saveEdit = async () => {
+    const v = parseFloat(String(eKm).replace(",", ".")); if (!v || v <= 0) return;
+    await updateRun(editId, { km: Math.round(v * 100) / 100, date: eDate });
+    setEditId(null); await refreshRuns();
+  };
+  const myRuns = runs.filter(r => r.uid === me.id);
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
@@ -314,7 +390,7 @@ function RunTab({ me, runs, refreshRuns, profiles }) {
         </div>
         {board.length === 0 && <div className="eg-meta">Пока пусто. Запиши первую пробежку — и возглавь таблицу.</div>}
         <div style={{ display: "grid", gap: 12 }}>
-          {board.map((b, i) => (
+          {(showAll ? board.slice(0, 100) : board.slice(0, 5)).map((b, i) => (
             <div key={b.uid} className="eg-row">
               <div style={{ width: 22, textAlign: "center", fontWeight: 700, color: i < 3 ? T.gold : T.muted }}>
                 {i === 0 ? <Medal size={18} color={T.gold} /> : i + 1}
@@ -332,16 +408,34 @@ function RunTab({ me, runs, refreshRuns, profiles }) {
             </div>
           ))}
         </div>
+        {board.length > 5 && (
+          <button className="eg-btn eg-ghost" style={{ width: "100%", marginTop: 12 }} onClick={() => setShowAll(v => !v)}>
+            {showAll ? <>Свернуть <ChevronUp size={16} /></> : <>Показать всех ({board.length}) <ChevronDown size={16} /></>}
+          </button>
+        )}
       </div>
 
-      {runs.filter(r => r.uid === me.id).length > 0 && (
+      {myRuns.length > 0 && (
         <div className="eg-card">
-          <div className="eg-lbl" style={{ marginBottom: 10 }}>Твои пробежки</div>
-          <div style={{ display: "grid", gap: 8 }}>
-            {runs.filter(r => r.uid === me.id).slice(0, 15).map(r => (
+          <div className="eg-row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+            <div className="eg-lbl">Мои тренировки</div>
+            <div className="eg-meta">итого за {YEAR}: <b style={{ color: T.gold }}>{mine.km.toFixed(1)} км</b></div>
+          </div>
+          <div style={{ display: "grid", gap: 8, maxHeight: 340, overflowY: "auto" }} className="eg-scroll">
+            {myRuns.map(r => editId === r.id ? (
+              <div key={r.id} className="eg-row" style={{ gap: 6 }}>
+                <input className="eg-in" style={{ width: 92 }} inputMode="decimal" value={eKm} onChange={e => setEKm(e.target.value)} />
+                <input className="eg-in" style={{ flex: 1 }} type="date" value={eDate} onChange={e => setEDate(e.target.value)} />
+                <button className="eg-emoji" style={{ color: T.gold }} onClick={saveEdit}><Check size={18} /></button>
+                <button className="eg-emoji" style={{ color: T.muted }} onClick={() => setEditId(null)}><X size={18} /></button>
+              </div>
+            ) : (
               <div key={r.id} className="eg-row" style={{ justifyContent: "space-between" }}>
                 <div><b>{r.km} км</b> <span className="eg-meta">· {fmtDate(r.date)}{r.note ? " · " + r.note : ""}</span></div>
-                <button className="eg-emoji" style={{ fontSize: 15, color: T.muted }} onClick={async () => { await delRun(r.id); refreshRuns(); }}><Trash2 size={16} /></button>
+                <div className="eg-row" style={{ gap: 2 }}>
+                  <button className="eg-emoji" style={{ fontSize: 15, color: T.muted }} onClick={() => startEdit(r)}><Pencil size={15} /></button>
+                  <button className="eg-emoji" style={{ fontSize: 15, color: T.muted }} onClick={async () => { await delRun(r.id); refreshRuns(); }}><Trash2 size={15} /></button>
+                </div>
               </div>
             ))}
           </div>
@@ -777,6 +871,7 @@ function MeTab({ me, saveMe, isAdmin, tryAdmin }) {
   const [sel, setSel] = useState({ ava: me.ava, photoId: me.photoId || null, photoPending: null });
   const [saving, setSaving] = useState(false);
   const [pin, setPin] = useState(""); const [err, setErr] = useState(false);
+  const [newPw, setNewPw] = useState(""); const [pwMsg, setPwMsg] = useState("");
   const dirty = name.trim() && (name.trim() !== me.name || sel.ava !== me.ava || (sel.photoId || null) !== (me.photoId || null) || sel.photoPending);
   const save = async () => {
     setSaving(true);
@@ -785,6 +880,13 @@ function MeTab({ me, saveMe, isAdmin, tryAdmin }) {
     saveMe({ ...me, name: name.trim(), ava: sel.ava || "🏃", photoId: pid || null });
     setSaving(false);
   };
+  const changePw = async () => {
+    if (!newPw) return;
+    await setPassword(me.id, await hashPass(newPw));
+    setNewPw(""); setPwMsg("Пароль обновлён ✓");
+    setTimeout(() => setPwMsg(""), 2500);
+  };
+  const logout = () => { localStorage.removeItem("energetik_me"); localStorage.removeItem("energetik_admin"); location.reload(); };
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <div className="eg-card">
@@ -793,6 +895,16 @@ function MeTab({ me, saveMe, isAdmin, tryAdmin }) {
         <div className="eg-lbl" style={{ margin: "14px 0 8px" }}>Аватар — фото или эмодзи</div>
         <AvatarPicker initAva={me.ava} initPhotoId={me.photoId} onChange={setSel} />
         <button className="eg-btn eg-gold" style={{ width: "100%", marginTop: 14 }} disabled={!dirty || saving} onClick={save}>{saving ? "Сохраняю…" : "Сохранить"}</button>
+      </div>
+
+      <div className="eg-card">
+        <div className="eg-lbl" style={{ marginBottom: 8 }}>Сменить пароль</div>
+        <div className="eg-row" style={{ gap: 8 }}>
+          <input className="eg-in" type="password" placeholder="Новый пароль" value={newPw} onChange={e => setNewPw(e.target.value)} />
+          <button className="eg-btn eg-ghost" disabled={!newPw} onClick={changePw}>Сменить</button>
+        </div>
+        {pwMsg && <div style={{ color: T.gold, fontSize: 13, marginTop: 6 }}>{pwMsg}</div>}
+        <button className="eg-btn eg-ghost" style={{ width: "100%", marginTop: 10 }} onClick={logout}>Выйти из учётки</button>
       </div>
 
       {!isAdmin ? (

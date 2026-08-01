@@ -144,3 +144,24 @@ export function subscribeMembers(cb) {
     .subscribe();
   return () => supabase.removeChannel(ch);
 }
+
+/* ── Вход по имени + паролю ────────────────────────────── */
+export async function getMemberByLogin(login) {
+  const { data } = await supabase.from("members").select("*").ilike("login", login).limit(1);
+  return (data && data[0]) || null;
+}
+export async function registerMember(m) {
+  const { error } = await supabase.from("members").insert({
+    id: m.id, login: m.login, name: m.name, ava: m.ava || null,
+    photo_id: m.photoId || null, pass_hash: m.passHash, updated_at: new Date().toISOString(),
+  });
+  return error;
+}
+export const setPassword = (id, passHash) =>
+  supabase.from("members").update({ pass_hash: passHash }).eq("id", id);
+export const renameMember = (id, login, name) =>
+  supabase.from("members").update({ login, name }).eq("id", id);
+
+/* ── Правка пробежки ──────────────────────────────────── */
+export const updateRun = (id, patch) =>
+  supabase.from("runs").update(patch).eq("id", id);
